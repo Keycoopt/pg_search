@@ -4,7 +4,7 @@ module PgSearch
   module Features
     class TSearch < Feature # rubocop:disable Metrics/ClassLength
       def self.valid_options
-        super + %i[dictionary prefix negation any_word normalization tsvector_column highlight]
+        super + %i[dictionary dictionaries prefix negation any_word normalization tsvector_column highlight]
       end
 
       def conditions
@@ -62,9 +62,13 @@ module PgSearch
         end
       end
 
+      def tsquery_for_term(unsanitized_term)
+        dictionaries.map {|d| tsquery_for_term_and_dictionary(unsanitized_term, d)}.join(" || ")
+      end
+
       DISALLOWED_TSQUERY_CHARACTERS = /['?\\:]/
 
-      def tsquery_for_term(unsanitized_term) # rubocop:disable Metrics/AbcSize
+      def tsquery_for_term_and_dictionary(unsanitized_term, dic) # rubocop:disable Metrics/AbcSize
         if options[:negation] && unsanitized_term.start_with?("!")
           unsanitized_term[0] = ''
           negated = true
@@ -91,7 +95,7 @@ module PgSearch
 
         Arel::Nodes::NamedFunction.new(
           "to_tsquery",
-          [dictionary, tsquery_sql]
+          [dic, tsquery_sql]
         ).to_sql
       end
 
@@ -141,8 +145,17 @@ module PgSearch
         ]).to_sql
       end
 
+      def dictionaries
+        dics = (Array(options[:dictionary]) + Array(options[:dictionaries])).uniq
+        dics = Array(:simple) unless dics.any?
+
+        dics.map do |d|
+          Arel::Nodes.build_quoted(d)
+        end
+      end
+
       def dictionary
-        Arel::Nodes.build_quoted(options[:dictionary] || :simple)
+        dictionaries.first
       end
 
       def arel_wrap(sql_string)
@@ -158,16 +171,18 @@ module PgSearch
       end
 
       def column_to_tsvector(search_column)
-        tsvector = Arel::Nodes::NamedFunction.new(
-          "to_tsvector",
-          [dictionary, Arel.sql(normalize(search_column.to_sql))]
-        ).to_sql
+        dictionaries.map do |_dictionary|
+          tsvector = Arel::Nodes::NamedFunction.new(
+            "to_tsvector",
+            [_dictionary, Arel.sql(normalize(search_column.to_sql))]
+          ).to_sql
 
-        if search_column.weight.nil?
-          tsvector
-        else
-          "setweight(#{tsvector}, #{connection.quote(search_column.weight)})"
-        end
+          if search_column.weight.nil?
+            tsvector
+          else
+            "setweight(#{tsvector}, #{connection.quote(search_column.weight)})"
+          end
+        end.join(' || ')
       end
     end
   end
