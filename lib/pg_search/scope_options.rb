@@ -116,7 +116,7 @@ module PgSearch
       end
 
       conditions = conditions.inject do |accumulator, expression|
-        Arel::Nodes::Or.new(accumulator, expression)
+        Arel::Nodes::Or.new([accumulator, expression])
       end
 
       conditions.to_sql
